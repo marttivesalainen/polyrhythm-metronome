@@ -122,12 +122,52 @@ const CSS = `
 
 const CHOICES = [2, 3, 4, 5, 6, 7];
 
+// URL-shareable settings <-> component state
+const DEFAULTS = { left: 5, right: 3, bpm: 80, volume: 0.8, subdiv: true };
+const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
+const pickChoice = (n, fallback) => (CHOICES.includes(n) ? n : fallback);
+
+function readSettingsFromURL() {
+	if (typeof window === "undefined") return DEFAULTS;
+	const q = new URLSearchParams(window.location.search);
+	const num = (k) => (q.has(k) ? Number(q.get(k)) : NaN);
+	const left = pickChoice(num("l"), DEFAULTS.left);
+	const right = pickChoice(num("r"), DEFAULTS.right);
+	const bpmRaw = num("bpm");
+	const bpm = Number.isFinite(bpmRaw)
+		? clamp(Math.round(bpmRaw), 20, 220)
+		: DEFAULTS.bpm;
+	const volRaw = num("v");
+	const volume = Number.isFinite(volRaw)
+		? clamp(volRaw, 0, 1)
+		: DEFAULTS.volume;
+	const subdiv = q.has("s") ? q.get("s") === "1" : DEFAULTS.subdiv;
+	return { left, right, bpm, volume, subdiv };
+}
+
+function writeSettingsToURL({ left, right, bpm, volume, subdiv }) {
+	if (typeof window === "undefined") return;
+	const q = new URLSearchParams();
+	if (left !== DEFAULTS.left) q.set("l", String(left));
+	if (right !== DEFAULTS.right) q.set("r", String(right));
+	if (bpm !== DEFAULTS.bpm) q.set("bpm", String(bpm));
+	if (volume !== DEFAULTS.volume) q.set("v", volume.toFixed(2));
+	if (subdiv !== DEFAULTS.subdiv) q.set("s", subdiv ? "1" : "0");
+	const search = q.toString();
+	const url =
+		window.location.pathname +
+		(search ? "?" + search : "") +
+		window.location.hash;
+	window.history.replaceState(null, "", url);
+}
+
 export default function PolyrhythmTrainer() {
-	const [left, setLeft] = useState(5);
-	const [right, setRight] = useState(3);
-	const [bpm, setBpm] = useState(80);
-	const [volume, setVolume] = useState(0.8);
-	const [subdiv, setSubdiv] = useState(true);
+	const initial = readSettingsFromURL();
+	const [left, setLeft] = useState(initial.left);
+	const [right, setRight] = useState(initial.right);
+	const [bpm, setBpm] = useState(initial.bpm);
+	const [volume, setVolume] = useState(initial.volume);
+	const [subdiv, setSubdiv] = useState(initial.subdiv);
 	const [playing, setPlaying] = useState(false);
 	const [col, setCol] = useState(-1);
 
@@ -145,6 +185,11 @@ export default function PolyrhythmTrainer() {
 	useEffect(() => {
 		paramsRef.current = { left, right, bpm, subdiv };
 	}, [left, right, bpm, subdiv]);
+
+	// keep the URL in sync so the current setup is linkable
+	useEffect(() => {
+		writeSettingsToURL({ left, right, bpm, volume, subdiv });
+	}, [left, right, bpm, volume, subdiv]);
 
 	const cols = left * right;
 
@@ -167,15 +212,19 @@ export default function PolyrhythmTrainer() {
 		if (masterRef.current) masterRef.current.gain.value = volume;
 	}, [volume]);
 
-	const tone = (t, { freq, type, dur, gain, drop }) => {
+	const tone = (
+		t,
+		{ freq, type, dur, gain, drop, detune = 0, attack = 0.003 },
+	) => {
 		const ctx = ctxRef.current;
 		const o = ctx.createOscillator();
 		const g = ctx.createGain();
 		o.type = type;
 		o.frequency.setValueAtTime(freq, t);
+		if (detune) o.detune.setValueAtTime(detune, t);
 		if (drop) o.frequency.exponentialRampToValueAtTime(freq * drop, t + dur);
 		g.gain.setValueAtTime(0.0001, t);
-		g.gain.linearRampToValueAtTime(gain, t + 0.003);
+		g.gain.linearRampToValueAtTime(gain, t + attack);
 		g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
 		o.connect(g);
 		g.connect(masterRef.current);
@@ -183,21 +232,156 @@ export default function PolyrhythmTrainer() {
 		o.stop(t + dur + 0.03);
 	};
 
-	// thin tick under everything, one per grid cell
-	const subTick = (t) =>
-		tone(t, { freq: 1650, type: "square", dur: 0.022, gain: 0.07 });
+	// short white-noise burst pushed through a bandpass, for snare crack / breath
+	const noiseBurst = (
+		t,
+		{ dur, gain, freq, Q = 1, type = "bandpass", attack = 0.002 },
+	) => {
+		const ctx = ctxRef.current;
+		const frames = Math.max(1, Math.floor(ctx.sampleRate * dur));
+		const buf = ctx.createBuffer(1, frames, ctx.sampleRate);
+		const data = buf.getChannelData(0);
+		for (let i = 0; i < frames; i++) data[i] = Math.random() * 2 - 1;
+		const src = ctx.createBufferSource();
+		src.buffer = buf;
+		const filt = ctx.createBiquadFilter();
+		filt.type = type;
+		filt.frequency.setValueAtTime(freq, t);
+		filt.Q.value = Q;
+		const g = ctx.createGain();
+		g.gain.setValueAtTime(0.0001, t);
+		g.gain.linearRampToValueAtTime(gain, t + attack);
+		g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+		src.connect(filt);
+		filt.connect(g);
+		g.connect(masterRef.current);
+		src.start(t);
+		src.stop(t + dur + 0.02);
+	};
 
-	// left hand: low woody knock. right hand: high glassy ping.
-	const playHit = (t, isL, isR) => {
-		if (isL)
-			tone(t, {
-				freq: 300,
-				type: "triangle",
-				dur: 0.11,
-				gain: 0.75,
-				drop: 0.55,
-			});
-		if (isR) tone(t, { freq: 900, type: "sine", dur: 0.07, gain: 0.4 });
+	// ---- TR-808-style voices ----
+	// Values follow the classic TR-808 topology as documented in the Roland
+	// service notes and reproduced in many analog-drum synthesis references.
+
+	// Closed hi-hat: six inharmonic square oscillators summed into a bandpass
+	// (~10 kHz) then highpass (~7 kHz), fast VCA decay (~50 ms).
+	// Original 808 metallic-oscillator frequencies:
+	const HAT_FREQS = [205, 304, 369, 522, 540, 800];
+	const hiHat808 = (t) => {
+		const ctx = ctxRef.current;
+		const bp = ctx.createBiquadFilter();
+		bp.type = "bandpass";
+		bp.frequency.value = 10000;
+		bp.Q.value = 0.8;
+		const hp = ctx.createBiquadFilter();
+		hp.type = "highpass";
+		hp.frequency.value = 7000;
+		const g = ctx.createGain();
+		const dur = 0.05;
+		const peak = 0.14;
+		g.gain.setValueAtTime(0.0001, t);
+		g.gain.linearRampToValueAtTime(peak, t + 0.001);
+		g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+		bp.connect(hp);
+		hp.connect(g);
+		g.connect(masterRef.current);
+		for (const f of HAT_FREQS) {
+			const o = ctx.createOscillator();
+			o.type = "square";
+			o.frequency.setValueAtTime(f, t);
+			o.connect(bp);
+			o.start(t);
+			o.stop(t + dur + 0.02);
+		}
+	};
+
+	// TR-808 bass drum: sine fundamental with a sharp pitch envelope
+	// (~180 Hz -> ~55 Hz in ~50 ms), long exponential amplitude decay,
+	// plus a short beater click transient.
+	const kick808 = (t) => {
+		const ctx = ctxRef.current;
+		const o = ctx.createOscillator();
+		const g = ctx.createGain();
+		o.type = "sine";
+		o.frequency.setValueAtTime(180, t);
+		o.frequency.exponentialRampToValueAtTime(55, t + 0.05);
+		const peak = 0.85;
+		const decay = 0.45;
+		g.gain.setValueAtTime(0.0001, t);
+		g.gain.linearRampToValueAtTime(peak, t + 0.002);
+		g.gain.exponentialRampToValueAtTime(0.0001, t + decay);
+		o.connect(g);
+		g.connect(masterRef.current);
+		o.start(t);
+		o.stop(t + decay + 0.05);
+		// beater click — very short highpassed noise transient
+		noiseBurst(t, {
+			dur: 0.005,
+			gain: 0.14,
+			freq: 4000,
+			Q: 0.7,
+			type: "highpass",
+			attack: 0.0005,
+		});
+	};
+
+	// TR-808 snare: two "T-bridge" tone oscillators (185 Hz + 330 Hz triangles)
+	// for the shell, and a bandpassed noise generator for the snappy wires.
+	const snare808 = (t) => {
+		// shell tones — real 808 uses ~30-80 ms decay on these
+		tone(t, {
+			freq: 330,
+			type: "triangle",
+			dur: 0.08,
+			gain: 0.28,
+			attack: 0.001,
+		});
+		tone(t, {
+			freq: 185,
+			type: "triangle",
+			dur: 0.08,
+			gain: 0.24,
+			attack: 0.001,
+		});
+		// snappy noise — bandpass around the 808's "SNAPPY" tuning
+		noiseBurst(t, {
+			dur: 0.19,
+			gain: 0.28,
+			freq: 1800,
+			Q: 0.6,
+			type: "bandpass",
+			attack: 0.002,
+		});
+		// upper snappy band, present but soft
+		noiseBurst(t, {
+			dur: 0.13,
+			gain: 0.18,
+			freq: 6500,
+			Q: 0.5,
+			type: "highpass",
+			attack: 0.002,
+		});
+	};
+
+	// tiny sine beep — very quiet marker for the "one" that adds no perceptible
+	// weight to the hit, so downbeat timing feels identical to every other beat.
+	const downbeatBeep = (t) =>
+		tone(t, {
+			freq: 2400,
+			type: "sine",
+			dur: 0.04,
+			gain: 0.05,
+			attack: 0.001,
+		});
+
+	// grid marker — the distant closed hat
+	const subTick = (t) => hiHat808(t);
+
+	// left = kick, right = snare. Downbeat gets a subtle sine beep on top.
+	const playHit = (t, isL, isR, isDownbeat = false) => {
+		if (isL) kick808(t);
+		if (isR) snare808(t);
+		if (isDownbeat) downbeatBeep(t);
 	};
 
 	/* ---------------- scheduling ---------------- */
@@ -221,9 +405,10 @@ export default function PolyrhythmTrainer() {
 			const c = colRef.current % total;
 			const isL = c % p.right === 0;
 			const isR = c % p.left === 0;
+			const isDownbeat = c === 0;
 			const t = nextTimeRef.current;
 			if (p.subdiv) subTick(t);
-			if (isL || isR) playHit(t, isL, isR);
+			if (isL || isR) playHit(t, isL, isR, isDownbeat);
 			queueRef.current.push({ col: c, time: t });
 			nextTimeRef.current = t + colDur;
 			colRef.current = (c + 1) % total;

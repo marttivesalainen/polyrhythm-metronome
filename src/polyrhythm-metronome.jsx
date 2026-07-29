@@ -5,7 +5,7 @@ import { useState, useEffect, useRef, useCallback } from "react";
  * left hand plays `left` strikes per cycle, right hand plays `right`.
  * Grid is left*right columns, so a left strike lands every `right`
  * columns and a right strike every `left` columns. They meet at 0.
- * Tempo is the left hand's pulse (60/bpm between left strikes).
+ * Tempo (bpm) is the left hand's pulse (60/bpm between left strikes).
  * ------------------------------------------------------------------ */
 
 const CSS = `
@@ -122,6 +122,37 @@ const CSS = `
 
 const CHOICES = [2, 3, 4, 5, 6, 7];
 
+// Silent looping WAV used to bypass the iOS mute switch. When any
+// HTMLAudioElement is playing, iOS Safari uses the "Playback" audio session
+// category which ignores the ringer/silent switch. Web Audio alone uses the
+// "Ambient" category, which respects it — so a silent HTMLAudio alongside our
+// Web Audio nodes lets the metronome be heard even when silent mode is on.
+let silentAudioUrl = null;
+function getSilentAudioUrl() {
+	if (silentAudioUrl) return silentAudioUrl;
+	if (typeof window === "undefined") return "";
+	const sampleRate = 22050;
+	const numSamples = Math.floor(sampleRate * 0.25); // 250 ms of silence
+	const dataSize = numSamples * 2;
+	const buf = new ArrayBuffer(44 + dataSize);
+	const v = new DataView(buf);
+	v.setUint32(0, 0x52494646, false); // "RIFF"
+	v.setUint32(4, 36 + dataSize, true);
+	v.setUint32(8, 0x57415645, false); // "WAVE"
+	v.setUint32(12, 0x666d7420, false); // "fmt "
+	v.setUint32(16, 16, true);
+	v.setUint16(20, 1, true); // PCM
+	v.setUint16(22, 1, true); // mono
+	v.setUint32(24, sampleRate, true);
+	v.setUint32(28, sampleRate * 2, true);
+	v.setUint16(32, 2, true);
+	v.setUint16(34, 16, true);
+	v.setUint32(36, 0x64617461, false); // "data"
+	v.setUint32(40, dataSize, true);
+	silentAudioUrl = URL.createObjectURL(new Blob([buf], { type: "audio/wav" }));
+	return silentAudioUrl;
+}
+
 // URL-shareable settings <-> component state
 const DEFAULTS = { left: 5, right: 3, bpm: 80, volume: 0.8, subdiv: true };
 const clamp = (n, lo, hi) => Math.min(hi, Math.max(lo, n));
@@ -173,6 +204,7 @@ export default function PolyrhythmTrainer() {
 
 	const ctxRef = useRef(null);
 	const masterRef = useRef(null);
+	const silentAudioRef = useRef(null);
 	const timerRef = useRef(null);
 	const rafRef = useRef(null);
 	const nextTimeRef = useRef(0);
@@ -196,6 +228,12 @@ export default function PolyrhythmTrainer() {
 	/* ---------------- audio ---------------- */
 
 	const getCtx = () => {
+		// iOS can put the context into "closed" state after a long background;
+		// resume() won't recover that, so drop and rebuild.
+		if (ctxRef.current && ctxRef.current.state === "closed") {
+			ctxRef.current = null;
+			masterRef.current = null;
+		}
 		if (!ctxRef.current) {
 			const AC = window.AudioContext || window.webkitAudioContext;
 			const ctx = new AC();
@@ -206,6 +244,19 @@ export default function PolyrhythmTrainer() {
 			masterRef.current = master;
 		}
 		return ctxRef.current;
+	};
+
+	// Silent looping <audio> element: primed on the first Start (user gesture)
+	// so that Safari flips the iOS audio session to "Playback" and our Web
+	// Audio drums are audible when the ringer switch is off.
+	const primeSilentAudio = () => {
+		if (silentAudioRef.current) return;
+		const el = new Audio(getSilentAudioUrl());
+		el.loop = true;
+		el.playsInline = true;
+		el.preload = "auto";
+		el.volume = 0;
+		silentAudioRef.current = el;
 	};
 
 	useEffect(() => {
@@ -400,6 +451,7 @@ export default function PolyrhythmTrainer() {
 		if (!ctx) return;
 		const p = paramsRef.current;
 		const total = p.left * p.right;
+		// bpm = left-hand strike rate; each cell is 1/right of a left beat.
 		const colDur = 60 / (p.bpm * p.right);
 		while (nextTimeRef.current < ctx.currentTime + 0.12) {
 			const c = colRef.current % total;
@@ -426,6 +478,7 @@ export default function PolyrhythmTrainer() {
 				setCol(e.col);
 			}
 			const p = paramsRef.current;
+			// one cycle spans `left` left-hand beats
 			const cycleDur = (60 * p.left) / p.bpm;
 			let ph = (now - cycleStartRef.current) / cycleDur;
 			if (!isFinite(ph) || ph < 0) ph = 0;
@@ -437,7 +490,10 @@ export default function PolyrhythmTrainer() {
 
 	const start = () => {
 		const ctx = getCtx();
-		if (ctx.state === "suspended") ctx.resume();
+		primeSilentAudio();
+		// silent HTMLAudio keeps iOS in "Playback" session (ignores mute switch)
+		silentAudioRef.current.play().catch(() => {});
+		if (ctx.state === "suspended") ctx.resume().catch(() => {});
 		resetPosition();
 		setPlaying(true);
 		timerRef.current = setInterval(schedule, 25);
@@ -452,6 +508,14 @@ export default function PolyrhythmTrainer() {
 		timerRef.current = null;
 		rafRef.current = null;
 		queueRef.current = [];
+		if (silentAudioRef.current) {
+			silentAudioRef.current.pause();
+			try {
+				silentAudioRef.current.currentTime = 0;
+			} catch {
+				/* ignore — iOS sometimes throws before metadata loads */
+			}
+		}
 		setCol(-1);
 		if (headRef.current) headRef.current.style.left = "0%";
 	};
@@ -474,14 +538,29 @@ export default function PolyrhythmTrainer() {
 				toggle();
 			}
 		};
+		// iOS may suspend or close the AudioContext when Safari is backgrounded,
+		// which can leave the scheduler wedged (timers still armed, but audio
+		// dead). Stop cleanly on hide so the Start button always recovers.
+		const onVisibility = () => {
+			if (document.hidden && playing) stop();
+		};
 		window.addEventListener("keydown", onKey);
-		return () => window.removeEventListener("keydown", onKey);
+		document.addEventListener("visibilitychange", onVisibility);
+		return () => {
+			window.removeEventListener("keydown", onKey);
+			document.removeEventListener("visibilitychange", onVisibility);
+		};
 	});
 
 	useEffect(
 		() => () => {
 			clearInterval(timerRef.current);
 			cancelAnimationFrame(rafRef.current);
+			if (silentAudioRef.current) {
+				silentAudioRef.current.pause();
+				silentAudioRef.current.src = "";
+				silentAudioRef.current = null;
+			}
 			if (ctxRef.current) ctxRef.current.close();
 		},
 		[],
@@ -489,7 +568,7 @@ export default function PolyrhythmTrainer() {
 
 	/* ---------------- view ---------------- */
 
-	const rightBpm = Math.round((bpm * right) / left);
+	// cycle spans `left` left-hand beats
 	const cycleSec = ((60 * left) / bpm).toFixed(2);
 
 	const rows = [
@@ -561,8 +640,7 @@ export default function PolyrhythmTrainer() {
 						<div className="pr-ctl-label">
 							<span>Tempo · left hand</span>
 							<b>
-								{bpm} bpm &nbsp;·&nbsp; right hand {rightBpm} &nbsp;·&nbsp;
-								cycle {cycleSec}s
+								{bpm} bpm &nbsp;·&nbsp; cycle {cycleSec}s
 							</b>
 						</div>
 						<input
@@ -612,7 +690,7 @@ export default function PolyrhythmTrainer() {
 					<div className="pr-switch">
 						<span className="pr-switch-text">
 							Background beat
-							<em>A tick on every cell of the grid — {cols} per cycle</em>
+							<em>A hi-hat on every grid cell — {cols} per cycle</em>
 						</span>
 						<button
 							className={"pr-toggle" + (subdiv ? " on" : "")}
@@ -641,10 +719,7 @@ export default function PolyrhythmTrainer() {
 					</div>
 				</div>
 
-				<div className="pr-foot">
-					Low knock = left hand, high ping = right hand. The background beat is
-					a thin tick marking the underlying grid. Space bar starts and stops.
-				</div>
+				<div className="pr-foot">Space bar starts and stops.</div>
 			</div>
 		</div>
 	);

@@ -3,7 +3,7 @@
 A polyrhythm trainer built with React + Vite. Left and right hands play against
 each other over a shared grid; the background beat marks every cell.
 
-Live: https://marttivesalainen.github.io/polyrythm-metronome/
+Live: https://marttivesalainen.github.io/polyrhythm-metronome/
 
 ## Develop
 

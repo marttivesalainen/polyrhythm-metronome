@@ -41,7 +41,7 @@ const CSS = `
   transition:background .15s, color .15s, border-color .15s;
 }
 .pr-btn:hover { border-color:var(--dim); }
-.pr-btn.on { background:var(--both); color:var(--ground); border-color:var(--both); }
+.pr-btn.on { background:var(--text); color:var(--ground); border-color:var(--text); }
 .pr-btn:focus-visible, .pr-num:focus-visible, .pr input:focus-visible {
   outline:2px solid var(--right); outline-offset:3px;
 }
@@ -51,7 +51,6 @@ const CSS = `
 .pr-grid { position:relative; }
 .pr-row { display:grid; grid-template-columns:74px 1fr; align-items:center; height:34px; }
 .pr-label { font-size:10px; letter-spacing:.14em; text-transform:uppercase; color:var(--dim); }
-.pr-row.a .pr-label { color:var(--both); }
 .pr-row.b .pr-label { color:var(--left); }
 .pr-row.c .pr-label { color:var(--right); }
 .pr-cells { display:grid; gap:2px; align-items:center; height:100%; }
@@ -62,7 +61,6 @@ const CSS = `
   background:currentColor; opacity:.42;
   transition:opacity .22s ease-out, transform .22s ease-out, box-shadow .22s ease-out;
 }
-.pr-row.a .pr-dot.hit { color:var(--both); }
 .pr-row.b .pr-dot.hit { color:var(--left); }
 .pr-row.c .pr-dot.hit { color:var(--right); }
 .pr-dot.hit.now { opacity:1; transform:scale(1.5); box-shadow:0 0 14px currentColor; transition-duration:0s; }
@@ -125,354 +123,344 @@ const CSS = `
 const CHOICES = [2, 3, 4, 5, 6, 7];
 
 export default function PolyrhythmTrainer() {
-  const [left, setLeft] = useState(5);
-  const [right, setRight] = useState(3);
-  const [bpm, setBpm] = useState(80);
-  const [volume, setVolume] = useState(0.8);
-  const [subdiv, setSubdiv] = useState(true);
-  const [playing, setPlaying] = useState(false);
-  const [col, setCol] = useState(-1);
+	const [left, setLeft] = useState(5);
+	const [right, setRight] = useState(3);
+	const [bpm, setBpm] = useState(80);
+	const [volume, setVolume] = useState(0.8);
+	const [subdiv, setSubdiv] = useState(true);
+	const [playing, setPlaying] = useState(false);
+	const [col, setCol] = useState(-1);
 
-  const ctxRef = useRef(null);
-  const masterRef = useRef(null);
-  const noiseRef = useRef(null);
-  const timerRef = useRef(null);
-  const rafRef = useRef(null);
-  const nextTimeRef = useRef(0);
-  const colRef = useRef(0);
-  const queueRef = useRef([]);
-  const cycleStartRef = useRef(0);
-  const headRef = useRef(null);
-  const paramsRef = useRef({ left, right, bpm, subdiv });
+	const ctxRef = useRef(null);
+	const masterRef = useRef(null);
+	const timerRef = useRef(null);
+	const rafRef = useRef(null);
+	const nextTimeRef = useRef(0);
+	const colRef = useRef(0);
+	const queueRef = useRef([]);
+	const cycleStartRef = useRef(0);
+	const headRef = useRef(null);
+	const paramsRef = useRef({ left, right, bpm, subdiv });
 
-  useEffect(() => {
-    paramsRef.current = { left, right, bpm, subdiv };
-  }, [left, right, bpm, subdiv]);
+	useEffect(() => {
+		paramsRef.current = { left, right, bpm, subdiv };
+	}, [left, right, bpm, subdiv]);
 
-  const cols = left * right;
+	const cols = left * right;
 
-  /* ---------------- audio ---------------- */
+	/* ---------------- audio ---------------- */
 
-  const getCtx = () => {
-    if (!ctxRef.current) {
-      const AC = window.AudioContext || window.webkitAudioContext;
-      const ctx = new AC();
-      const master = ctx.createGain();
-      master.gain.value = volume;
-      master.connect(ctx.destination);
-      // short noise buffer for the together-accent
-      const len = Math.floor(ctx.sampleRate * 0.05);
-      const buf = ctx.createBuffer(1, len, ctx.sampleRate);
-      const d = buf.getChannelData(0);
-      for (let i = 0; i < len; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / len);
-      ctxRef.current = ctx;
-      masterRef.current = master;
-      noiseRef.current = buf;
-    }
-    return ctxRef.current;
-  };
+	const getCtx = () => {
+		if (!ctxRef.current) {
+			const AC = window.AudioContext || window.webkitAudioContext;
+			const ctx = new AC();
+			const master = ctx.createGain();
+			master.gain.value = volume;
+			master.connect(ctx.destination);
+			ctxRef.current = ctx;
+			masterRef.current = master;
+		}
+		return ctxRef.current;
+	};
 
-  useEffect(() => {
-    if (masterRef.current) masterRef.current.gain.value = volume;
-  }, [volume]);
+	useEffect(() => {
+		if (masterRef.current) masterRef.current.gain.value = volume;
+	}, [volume]);
 
-  const tone = (t, { freq, type, dur, gain, drop }) => {
-    const ctx = ctxRef.current;
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = type;
-    o.frequency.setValueAtTime(freq, t);
-    if (drop) o.frequency.exponentialRampToValueAtTime(freq * drop, t + dur);
-    g.gain.setValueAtTime(0.0001, t);
-    g.gain.linearRampToValueAtTime(gain, t + 0.003);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-    o.connect(g);
-    g.connect(masterRef.current);
-    o.start(t);
-    o.stop(t + dur + 0.03);
-  };
+	const tone = (t, { freq, type, dur, gain, drop }) => {
+		const ctx = ctxRef.current;
+		const o = ctx.createOscillator();
+		const g = ctx.createGain();
+		o.type = type;
+		o.frequency.setValueAtTime(freq, t);
+		if (drop) o.frequency.exponentialRampToValueAtTime(freq * drop, t + dur);
+		g.gain.setValueAtTime(0.0001, t);
+		g.gain.linearRampToValueAtTime(gain, t + 0.003);
+		g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+		o.connect(g);
+		g.connect(masterRef.current);
+		o.start(t);
+		o.stop(t + dur + 0.03);
+	};
 
-  const noise = (t, gain) => {
-    const ctx = ctxRef.current;
-    const s = ctx.createBufferSource();
-    const f = ctx.createBiquadFilter();
-    const g = ctx.createGain();
-    s.buffer = noiseRef.current;
-    f.type = "highpass";
-    f.frequency.value = 2200;
-    g.gain.setValueAtTime(gain, t);
-    g.gain.exponentialRampToValueAtTime(0.0001, t + 0.05);
-    s.connect(f);
-    f.connect(g);
-    g.connect(masterRef.current);
-    s.start(t);
-  };
+	// thin tick under everything, one per grid cell
+	const subTick = (t) =>
+		tone(t, { freq: 1650, type: "square", dur: 0.022, gain: 0.07 });
 
-  // thin tick under everything, one per grid cell
-  const subTick = (t) => tone(t, { freq: 1650, type: "square", dur: 0.022, gain: 0.07 });
+	// left hand: low woody knock. right hand: high glassy ping.
+	const playHit = (t, isL, isR) => {
+		if (isL)
+			tone(t, {
+				freq: 300,
+				type: "triangle",
+				dur: 0.11,
+				gain: 0.75,
+				drop: 0.55,
+			});
+		if (isR) tone(t, { freq: 900, type: "sine", dur: 0.07, gain: 0.4 });
+	};
 
-  // left hand: low woody knock. right hand: high glassy ping.
-  const playHit = (t, isL, isR) => {
-    if (isL && isR) noise(t, 0.5);
-    if (isL) tone(t, { freq: 300, type: "triangle", dur: 0.11, gain: 0.75, drop: 0.55 });
-    if (isR) tone(t, { freq: 900, type: "sine", dur: 0.07, gain: 0.4 });
-  };
+	/* ---------------- scheduling ---------------- */
 
-  /* ---------------- scheduling ---------------- */
+	const resetPosition = useCallback(() => {
+		const ctx = ctxRef.current;
+		if (!ctx) return;
+		colRef.current = 0;
+		queueRef.current = [];
+		nextTimeRef.current = ctx.currentTime + 0.06;
+		cycleStartRef.current = nextTimeRef.current;
+	}, []);
 
-  const resetPosition = useCallback(() => {
-    const ctx = ctxRef.current;
-    if (!ctx) return;
-    colRef.current = 0;
-    queueRef.current = [];
-    nextTimeRef.current = ctx.currentTime + 0.06;
-    cycleStartRef.current = nextTimeRef.current;
-  }, []);
+	const schedule = useCallback(() => {
+		const ctx = ctxRef.current;
+		if (!ctx) return;
+		const p = paramsRef.current;
+		const total = p.left * p.right;
+		const colDur = 60 / (p.bpm * p.right);
+		while (nextTimeRef.current < ctx.currentTime + 0.12) {
+			const c = colRef.current % total;
+			const isL = c % p.right === 0;
+			const isR = c % p.left === 0;
+			const t = nextTimeRef.current;
+			if (p.subdiv) subTick(t);
+			if (isL || isR) playHit(t, isL, isR);
+			queueRef.current.push({ col: c, time: t });
+			nextTimeRef.current = t + colDur;
+			colRef.current = (c + 1) % total;
+		}
+	}, []);
 
-  const schedule = useCallback(() => {
-    const ctx = ctxRef.current;
-    if (!ctx) return;
-    const p = paramsRef.current;
-    const total = p.left * p.right;
-    const colDur = 60 / (p.bpm * p.right);
-    while (nextTimeRef.current < ctx.currentTime + 0.12) {
-      const c = colRef.current % total;
-      const isL = c % p.right === 0;
-      const isR = c % p.left === 0;
-      const t = nextTimeRef.current;
-      if (p.subdiv) subTick(t);
-      if (isL || isR) playHit(t, isL, isR);
-      queueRef.current.push({ col: c, time: t });
-      nextTimeRef.current = t + colDur;
-      colRef.current = (c + 1) % total;
-    }
-  }, []);
+	const frame = useCallback(() => {
+		const ctx = ctxRef.current;
+		if (ctx) {
+			const now = ctx.currentTime;
+			const q = queueRef.current;
+			while (q.length && q[0].time <= now) {
+				const e = q.shift();
+				if (e.col === 0) cycleStartRef.current = e.time;
+				setCol(e.col);
+			}
+			const p = paramsRef.current;
+			const cycleDur = (60 * p.left) / p.bpm;
+			let ph = (now - cycleStartRef.current) / cycleDur;
+			if (!isFinite(ph) || ph < 0) ph = 0;
+			if (ph > 1) ph = 1;
+			if (headRef.current) headRef.current.style.left = ph * 100 + "%";
+		}
+		rafRef.current = requestAnimationFrame(frame);
+	}, []);
 
-  const frame = useCallback(() => {
-    const ctx = ctxRef.current;
-    if (ctx) {
-      const now = ctx.currentTime;
-      const q = queueRef.current;
-      while (q.length && q[0].time <= now) {
-        const e = q.shift();
-        if (e.col === 0) cycleStartRef.current = e.time;
-        setCol(e.col);
-      }
-      const p = paramsRef.current;
-      const cycleDur = (60 * p.left) / p.bpm;
-      let ph = (now - cycleStartRef.current) / cycleDur;
-      if (!isFinite(ph) || ph < 0) ph = 0;
-      if (ph > 1) ph = 1;
-      if (headRef.current) headRef.current.style.left = ph * 100 + "%";
-    }
-    rafRef.current = requestAnimationFrame(frame);
-  }, []);
+	const start = () => {
+		const ctx = getCtx();
+		if (ctx.state === "suspended") ctx.resume();
+		resetPosition();
+		setPlaying(true);
+		timerRef.current = setInterval(schedule, 25);
+		schedule();
+		rafRef.current = requestAnimationFrame(frame);
+	};
 
-  const start = () => {
-    const ctx = getCtx();
-    if (ctx.state === "suspended") ctx.resume();
-    resetPosition();
-    setPlaying(true);
-    timerRef.current = setInterval(schedule, 25);
-    schedule();
-    rafRef.current = requestAnimationFrame(frame);
-  };
+	const stop = () => {
+		setPlaying(false);
+		clearInterval(timerRef.current);
+		cancelAnimationFrame(rafRef.current);
+		timerRef.current = null;
+		rafRef.current = null;
+		queueRef.current = [];
+		setCol(-1);
+		if (headRef.current) headRef.current.style.left = "0%";
+	};
 
-  const stop = () => {
-    setPlaying(false);
-    clearInterval(timerRef.current);
-    cancelAnimationFrame(rafRef.current);
-    timerRef.current = null;
-    rafRef.current = null;
-    queueRef.current = [];
-    setCol(-1);
-    if (headRef.current) headRef.current.style.left = "0%";
-  };
+	const toggle = () => (playing ? stop() : start());
 
-  const toggle = () => (playing ? stop() : start());
+	// changing a hand's count changes the grid, so restart the cycle cleanly
+	useEffect(() => {
+		if (playing) resetPosition();
+	}, [left, right, playing, resetPosition]);
 
-  // changing a hand's count changes the grid, so restart the cycle cleanly
-  useEffect(() => {
-    if (playing) resetPosition();
-  }, [left, right, playing, resetPosition]);
+	useEffect(() => {
+		const onKey = (e) => {
+			if (
+				e.code === "Space" &&
+				e.target.tagName !== "INPUT" &&
+				e.target.tagName !== "BUTTON"
+			) {
+				e.preventDefault();
+				toggle();
+			}
+		};
+		window.addEventListener("keydown", onKey);
+		return () => window.removeEventListener("keydown", onKey);
+	});
 
-  useEffect(() => {
-    const onKey = (e) => {
-      if (e.code === "Space" && e.target.tagName !== "INPUT" && e.target.tagName !== "BUTTON") {
-        e.preventDefault();
-        toggle();
-      }
-    };
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  });
+	useEffect(
+		() => () => {
+			clearInterval(timerRef.current);
+			cancelAnimationFrame(rafRef.current);
+			if (ctxRef.current) ctxRef.current.close();
+		},
+		[],
+	);
 
-  useEffect(
-    () => () => {
-      clearInterval(timerRef.current);
-      cancelAnimationFrame(rafRef.current);
-      if (ctxRef.current) ctxRef.current.close();
-    },
-    []
-  );
+	/* ---------------- view ---------------- */
 
-  /* ---------------- view ---------------- */
+	const rightBpm = Math.round((bpm * right) / left);
+	const cycleSec = ((60 * left) / bpm).toFixed(2);
 
-  const rightBpm = Math.round((bpm * right) / left);
-  const cycleSec = ((60 * left) / bpm).toFixed(2);
+	const rows = [
+		{ key: "b", label: "left", hit: (c) => c % right === 0 },
+		{ key: "c", label: "right", hit: (c) => c % left === 0 },
+	];
 
-  const rows = [
-    { key: "a", label: "together", hit: (c) => c % right === 0 && c % left === 0 },
-    { key: "b", label: "left hand", hit: (c) => c % right === 0 },
-    { key: "c", label: "right hand", hit: (c) => c % left === 0 },
-  ];
+	const cellStyle = { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` };
 
-  const cellStyle = { gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` };
+	return (
+		<div className="pr">
+			<style>{CSS}</style>
+			<div className="pr-wrap">
+				<div className="pr-head">
+					<div>
+						<div className="pr-ratio">
+							<span className="l">{left}</span>
+							<span className="c">:</span>
+							<span className="r">{right}</span>
+						</div>
+						<div className="pr-sub">
+							{left} in the left hand against {right} in the right
+						</div>
+					</div>
+					<button
+						className={"pr-btn" + (playing ? " on" : "")}
+						onClick={toggle}
+					>
+						{playing ? "Stop" : "Start"}
+					</button>
+				</div>
 
-  return (
-    <div className="pr">
-      <style>{CSS}</style>
-      <div className="pr-wrap">
-        <div className="pr-head">
-          <div>
-            <div className="pr-ratio">
-              <span className="l">{left}</span>
-              <span className="c">:</span>
-              <span className="r">{right}</span>
-            </div>
-            <div className="pr-sub">
-              {left} in the left hand against {right} in the right
-            </div>
-          </div>
-          <button className={"pr-btn" + (playing ? " on" : "")} onClick={toggle}>
-            {playing ? "Stop" : "Start"}
-          </button>
-        </div>
+				<div className="pr-panel">
+					<div className="pr-grid">
+						{rows.map((r) => (
+							<div className={"pr-row " + r.key} key={r.key}>
+								<span className="pr-label">{r.label}</span>
+								<div className="pr-cells" style={cellStyle}>
+									{Array.from({ length: cols }, (_, c) => {
+										const on = r.hit(c);
+										return (
+											<span className="pr-cell" key={c}>
+												<span
+													className={
+														"pr-dot" +
+														(on ? " hit" : subdiv ? " rest" : "") +
+														(c === col && (on || subdiv) ? " now" : "")
+													}
+												/>
+											</span>
+										);
+									})}
+								</div>
+							</div>
+						))}
+						<div className="pr-overlay">
+							<div className="pr-lines" style={cellStyle}>
+								{Array.from({ length: cols }, (_, c) => (
+									<i className={c % right === 0 ? "beat" : ""} key={c} />
+								))}
+							</div>
+							{playing && <div className="pr-head-line" ref={headRef} />}
+						</div>
+					</div>
+				</div>
 
-        <div className="pr-panel">
-          <div className="pr-grid">
-            {rows.map((r) => (
-              <div className={"pr-row " + r.key} key={r.key}>
-                <span className="pr-label">{r.label}</span>
-                <div className="pr-cells" style={cellStyle}>
-                  {Array.from({ length: cols }, (_, c) => {
-                    const on = r.hit(c);
-                    return (
-                      <span className="pr-cell" key={c}>
-                        <span
-                          className={
-                            "pr-dot" +
-                            (on ? " hit" : subdiv ? " rest" : "") +
-                            (c === col && (on || subdiv) ? " now" : "")
-                          }
-                        />
-                      </span>
-                    );
-                  })}
-                </div>
-              </div>
-            ))}
-            <div className="pr-overlay">
-              <div className="pr-lines" style={cellStyle}>
-                {Array.from({ length: cols }, (_, c) => (
-                  <i className={c % right === 0 ? "beat" : ""} key={c} />
-                ))}
-              </div>
-              {playing && <div className="pr-head-line" ref={headRef} />}
-            </div>
-          </div>
-        </div>
+				<div className="pr-controls">
+					<div>
+						<div className="pr-ctl-label">
+							<span>Tempo · left hand</span>
+							<b>
+								{bpm} bpm &nbsp;·&nbsp; right hand {rightBpm} &nbsp;·&nbsp;
+								cycle {cycleSec}s
+							</b>
+						</div>
+						<input
+							type="range"
+							min="20"
+							max="220"
+							value={bpm}
+							onChange={(e) => setBpm(+e.target.value)}
+						/>
+					</div>
 
-        <div className="pr-controls">
-          <div>
-            <div className="pr-ctl-label">
-              <span>Tempo · left hand</span>
-              <b>
-                {bpm} bpm &nbsp;·&nbsp; right hand {rightBpm} &nbsp;·&nbsp; cycle {cycleSec}s
-              </b>
-            </div>
-            <input
-              type="range"
-              min="20"
-              max="220"
-              value={bpm}
-              onChange={(e) => setBpm(+e.target.value)}
-            />
-          </div>
+					<div className="pr-hands">
+						<div className="lh">
+							<div className="pr-ctl-label">
+								<span>Left</span>
+							</div>
+							<div className="pr-nums">
+								{CHOICES.map((v) => (
+									<button
+										key={v}
+										className={"pr-num" + (v === left ? " sel" : "")}
+										onClick={() => setLeft(v)}
+									>
+										{v}
+									</button>
+								))}
+							</div>
+						</div>
+						<div className="rh">
+							<div className="pr-ctl-label">
+								<span>Right</span>
+							</div>
+							<div className="pr-nums">
+								{CHOICES.map((v) => (
+									<button
+										key={v}
+										className={"pr-num" + (v === right ? " sel" : "")}
+										onClick={() => setRight(v)}
+									>
+										{v}
+									</button>
+								))}
+							</div>
+						</div>
+					</div>
 
-          <div className="pr-hands">
-            <div className="lh">
-              <div className="pr-ctl-label">
-                <span>Left</span>
-              </div>
-              <div className="pr-nums">
-                {CHOICES.map((v) => (
-                  <button
-                    key={v}
-                    className={"pr-num" + (v === left ? " sel" : "")}
-                    onClick={() => setLeft(v)}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
-            <div className="rh">
-              <div className="pr-ctl-label">
-                <span>Right</span>
-              </div>
-              <div className="pr-nums">
-                {CHOICES.map((v) => (
-                  <button
-                    key={v}
-                    className={"pr-num" + (v === right ? " sel" : "")}
-                    onClick={() => setRight(v)}
-                  >
-                    {v}
-                  </button>
-                ))}
-              </div>
-            </div>
-          </div>
+					<div className="pr-switch">
+						<span className="pr-switch-text">
+							Background beat
+							<em>A tick on every cell of the grid — {cols} per cycle</em>
+						</span>
+						<button
+							className={"pr-toggle" + (subdiv ? " on" : "")}
+							role="switch"
+							aria-checked={subdiv}
+							aria-label="Background beat"
+							onClick={() => setSubdiv((s) => !s)}
+						>
+							<span />
+						</button>
+					</div>
 
-          <div className="pr-switch">
-            <span className="pr-switch-text">
-              Background beat
-              <em>A tick on every cell of the grid — {cols} per cycle</em>
-            </span>
-            <button
-              className={"pr-toggle" + (subdiv ? " on" : "")}
-              role="switch"
-              aria-checked={subdiv}
-              aria-label="Background beat"
-              onClick={() => setSubdiv((s) => !s)}
-            >
-              <span />
-            </button>
-          </div>
+					<div>
+						<div className="pr-ctl-label">
+							<span>Volume</span>
+							<b>{Math.round(volume * 100)}%</b>
+						</div>
+						<input
+							type="range"
+							min="0"
+							max="1"
+							step="0.01"
+							value={volume}
+							onChange={(e) => setVolume(+e.target.value)}
+						/>
+					</div>
+				</div>
 
-          <div>
-            <div className="pr-ctl-label">
-              <span>Volume</span>
-              <b>{Math.round(volume * 100)}%</b>
-            </div>
-            <input
-              type="range"
-              min="0"
-              max="1"
-              step="0.01"
-              value={volume}
-              onChange={(e) => setVolume(+e.target.value)}
-            />
-          </div>
-        </div>
-
-        <div className="pr-foot">
-          Low knock = left hand, high ping = right hand, both plus a click where they land
-          together. The background beat is a thin tick marking the underlying grid. Space bar
-          starts and stops.
-        </div>
-      </div>
-    </div>
-  );
+				<div className="pr-foot">
+					Low knock = left hand, high ping = right hand. The background beat is
+					a thin tick marking the underlying grid. Space bar starts and stops.
+				</div>
+			</div>
+		</div>
+	);
 }

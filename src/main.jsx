@@ -3,7 +3,7 @@ import { createRoot } from "react-dom/client";
 import PolyrhythmTrainer from "./polyrhythm-metronome.jsx";
 
 createRoot(document.getElementById("root")).render(
-  <StrictMode>
-    <PolyrhythmTrainer />
-  </StrictMode>
+	<StrictMode>
+		<PolyrhythmTrainer />
+	</StrictMode>,
 );
